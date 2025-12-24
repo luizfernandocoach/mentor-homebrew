@@ -39,90 +39,76 @@ def configure_api():
         st.stop()
     return api_key
 
-# --- SELETOR DE MODELO ---
+# --- SELETOR DE MODELO INTELIGENTE (RESTAURADO) ---
 def get_best_model():
-    # Tenta achar o Flash 1.5 (Melhor custo/benefício para muitos livros)
-    return 'models/gemini-1.5-flash'
+    """Busca dinâmica para evitar erro 404"""
+    try:
+        # Tenta listar o que tem disponível na conta
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                if 'flash' in m.name: return m.name # Prioriza Flash (qualquer versão)
+        return 'models/gemini-1.5-flash' # Tentativa padrão
+    except:
+        return 'models/gemini-1.5-flash' # Fallback final
 
-# --- CARREGAMENTO MULTI-ARQUIVO (NOVO) ---
+# --- CARREGAMENTO MULTI-ARQUIVO ---
 @st.cache_resource
 def load_multiple_files(api_key):
-    """
-    Varre a pasta 'files' e faz upload de TODOS os PDFs encontrados.
-    Retorna uma lista de referências de arquivos.
-    """
     genai.configure(api_key=api_key)
-    
-    # Localiza a pasta
     current_dir = os.path.dirname(os.path.abspath(__file__))
     files_dir = os.path.join(current_dir, "files")
     
-    if not os.path.exists(files_dir):
-        return None, f"Pasta 'files' não encontrada em {current_dir}"
+    if not os.path.exists(files_dir): return None, "Pasta 'files' não encontrada."
 
-    # Lista todos os PDFs
     pdf_files = [f for f in os.listdir(files_dir) if f.lower().endswith('.pdf')]
-    
-    if not pdf_files:
-        return None, "Nenhum PDF encontrado na pasta 'files'."
+    if not pdf_files: return None, "Nenhum PDF na pasta."
 
     uploaded_refs = []
     failed_files = []
-
-    # Barra de progresso visual
-    progress_text = "Processando Biblioteca..."
-    my_bar = st.progress(0, text=progress_text)
+    
+    # Barra de progresso
+    my_bar = st.progress(0, text="Processando Biblioteca...")
 
     for i, filename in enumerate(pdf_files):
         file_path = os.path.join(files_dir, filename)
         try:
-            # Upload
             file_ref = genai.upload_file(file_path, mime_type="application/pdf")
             
-            # Espera ficar ATIVO (Loop de verificação)
+            # Loop de espera (Wait for Active)
             ready = False
-            for _ in range(15): # Tenta por 30 segundos
+            for _ in range(15):
                 if file_ref.state.name == "ACTIVE":
                     ready = True
                     break
                 if file_ref.state.name == "FAILED":
                     ready = False
                     break
-                time.sleep(2)
+                time.sleep(1)
                 file_ref = genai.get_file(file_ref.name)
             
-            if ready:
-                uploaded_refs.append(file_ref)
-            else:
-                failed_files.append(filename)
+            if ready: uploaded_refs.append(file_ref)
+            else: failed_files.append(filename)
                 
         except Exception as e:
-            failed_files.append(f"{filename} ({str(e)})")
+            failed_files.append(f"{filename}")
         
-        # Atualiza barra
-        percent_complete = (i + 1) / len(pdf_files)
-        my_bar.progress(percent_complete, text=f"Lendo: {filename}")
+        my_bar.progress((i + 1) / len(pdf_files), text=f"Lendo: {filename}")
 
-    my_bar.empty() # Remove barra ao fim
+    my_bar.empty()
     
-    if failed_files:
-        return uploaded_refs, f"Alguns arquivos falharam: {failed_files}"
-    
+    if failed_files: return uploaded_refs, f"Falha em: {failed_files}"
     return uploaded_refs, None
 
 # --- APP PRINCIPAL ---
 if check_password():
     with st.sidebar:
-        st.title("📚 Biblioteca Ativa")
-        
-        # Mostra status da biblioteca na barra lateral (Visualização Útil)
+        st.title("📚 Biblioteca")
         if "library_refs" in st.session_state and st.session_state["library_refs"]:
-            st.success(f"{len(st.session_state['library_refs'])} Livros Carregados")
+            st.success(f"{len(st.session_state['library_refs'])} Livros Ativos")
         
-        if st.button("🔄 Recarregar Biblioteca"):
+        if st.button("🔄 Recarregar"):
             st.cache_resource.clear()
-            if "library_refs" in st.session_state:
-                del st.session_state["library_refs"]
+            if "library_refs" in st.session_state: del st.session_state["library_refs"]
             st.rerun()
 
         st.divider()
@@ -131,30 +117,28 @@ if check_password():
             st.rerun()
 
     st.title("Mentor AI: Expert 🏋️")
-    st.caption("Baseado em Evidências: Schoenfeld, IUSCA & Revisões Sistemáticas")
+    st.caption("Baseado em Evidências (Schoenfeld, IUSCA, etc)")
 
     api_key = configure_api()
 
-    # Carrega a Biblioteca (Multi-arquivos)
+    # Carrega Biblioteca
     if "library_refs" not in st.session_state or not st.session_state["library_refs"]:
-        with st.spinner("O Mentor está estudando seus novos livros... (Isso pode levar 1 minuto)"):
+        with st.spinner("Estudando novos livros..."):
             refs, err = load_multiple_files(api_key)
-            
             if refs:
                 st.session_state["library_refs"] = refs
-                if err: st.warning(err) # Aviso se algum falhou, mas continua com os que deram certo
-                else: st.toast("Biblioteca Completa Carregada!", icon="✅")
-            else:
-                st.error(f"Falha crítica: {err}")
+                if err: st.warning(err)
+                else: st.toast("Biblioteca Pronta!", icon="✅")
+            else: st.error(f"Erro: {err}")
 
     # Chat
     if "messages" not in st.session_state:
-        st.session_state.messages = [{"role": "assistant", "content": "Olá! Minha base de conhecimento foi atualizada. Pergunte sobre hipertrofia, glúteos ou recomendações da IUSCA."}]
+        st.session_state.messages = [{"role": "assistant", "content": "Olá! Biblioteca atualizada. Pode perguntar."}]
 
     for msg in st.session_state.messages:
         st.chat_message(msg["role"]).write(msg["content"])
 
-    if prompt := st.chat_input("Ex: Segundo Schoenfeld, qual o volume ideal para hipertrofia?"):
+    if prompt := st.chat_input("Dúvida técnica..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         st.chat_message("user").write(prompt)
 
@@ -164,23 +148,16 @@ if check_password():
             
             if library:
                 try:
+                    # AQUI ESTÁ A CORREÇÃO: Usa a função inteligente novamente
                     model_name = get_best_model()
+                    
                     model = genai.GenerativeModel(model_name, 
-                        system_instruction="""
-                        Você é um Mentor de Elite. 
-                        Use EXCLUSIVAMENTE os livros fornecidos.
-                        Ao responder, CITE A FONTE (ex: 'Segundo Schoenfeld...', 'De acordo com a IUSCA...').
-                        Se houver conflito entre autores, apresente as duas visões.
-                        """)
+                        system_instruction="Você é um Mentor Sênior. Responda usando APENAS os arquivos fornecidos. CITE AS FONTES.")
                     
-                    # AQUI ESTÁ A MÁGICA: Passamos a lista inteira de arquivos + a pergunta
-                    request_content = library + [prompt]
-                    
-                    response = model.generate_content(request_content)
+                    response = model.generate_content(library + [prompt])
                     container.markdown(response.text)
                     st.session_state.messages.append({"role": "assistant", "content": response.text})
                 except Exception as e:
                     container.error(f"Erro: {e}")
-                    if "429" in str(e): st.error("Muitos livros carregados. Tente remover o arquivo maior.")
             else:
                 container.error("Biblioteca desconectada.")
