@@ -1,9 +1,10 @@
 import streamlit as st
 import google.generativeai as genai
+import streamlit.components.v1 as components
 import time
 import os
 
-# --- 1. CONFIGURAÇÃO VISUAL (HOMEBREW THEME) ---
+# --- 1. CONFIGURAÇÃO VISUAL ---
 st.set_page_config(
     page_title="Mentor AI | Homebrew",
     page_icon="⚡",
@@ -33,25 +34,25 @@ st.markdown(f"""
     section[data-testid="stSidebar"] {{ background-color: {COR_SIDEBAR}; border-right: 1px solid #333; }}
     .stChatMessage {{ background-color: transparent; border-bottom: 1px solid #333; }}
     div[data-testid="stToast"] {{ background-color: {COR_LARANJA}; color: white; }}
+    
+    /* Ajuste para Mobile: Espaço extra no fim para o teclado não cobrir tudo */
+    .stChatInput {{ padding-bottom: 20px; }}
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. GESTÃO DE ACESSO (SIMPLIFICADA) ---
-# Acesso único para todos os testers
+# --- 2. GESTÃO DE ACESSO ---
 USUARIOS = {
-    "admin": "homebrew",     # Seu acesso
-    "beta": "treino2025"     # Acesso dos 5 Personais (Compartilhado)
+    "admin": "homebrew", 
+    "beta": "treino2025"
 }
 
 # --- 3. FUNÇÕES TÉCNICAS ---
 def check_password():
     if st.session_state.get("logged_in"): return True
-    
     col1, col2, col3 = st.columns([1, 1, 1])
     with col2:
         st.markdown(f"<h1 style='text-align: center; color: {COR_LARANJA};'>MENTOR <span style='color:white'>AI</span></h1>", unsafe_allow_html=True)
         st.markdown("<p style='text-align: center; color: gray; margin-bottom: 30px;'>Acesso Beta Restrito</p>", unsafe_allow_html=True)
-        
         with st.container(border=True):
             u = st.text_input("USUÁRIO", placeholder="beta")
             p = st.text_input("SENHA", type="password", placeholder="••••••")
@@ -77,6 +78,15 @@ def get_best_model():
                 if 'flash' in m.name: return m.name
         return 'models/gemini-1.5-flash'
     except: return 'models/gemini-1.5-flash'
+
+# Função para fechar o teclado no celular
+def dismiss_keyboard():
+    components.html("""
+        <script>
+            var input = window.parent.document.querySelector("textarea[data-testid='stChatInputTextArea']");
+            if (input) { input.blur(); }
+        </script>
+    """, height=0, width=0)
 
 @st.cache_resource
 def load_multiple_files(api_key):
@@ -118,23 +128,14 @@ if check_password():
         st.markdown(f"<h2 style='color:{COR_LARANJA}; margin-bottom:0;'>HOMEBREW</h2>", unsafe_allow_html=True)
         st.markdown("<p style='font-size: 12px; color: gray; letter-spacing: 2px;'>BETA TESTER</p>", unsafe_allow_html=True)
         st.divider()
-        
         st.markdown("### STATUS")
         if "library_refs" in st.session_state and st.session_state["library_refs"]:
             st.success(f"● ONLINE | {len(st.session_state['library_refs'])} Livros")
         else: st.warning("○ CARREGANDO...")
-            
-        st.markdown("### AÇÕES")
+        
         if st.button("LIMPAR CHAT 🗑️"):
             st.session_state.messages = []
             st.rerun()
-            
-        if st.button("RECARREGAR 🔄"):
-            st.cache_resource.clear()
-            if "library_refs" in st.session_state: del st.session_state["library_refs"]
-            st.rerun()
-
-        st.divider()
         if st.button("SAIR"): 
             st.session_state["logged_in"] = False
             st.rerun()
@@ -161,29 +162,53 @@ if check_password():
             st.chat_message(msg["role"], avatar=avatar).write(msg["content"])
 
     if prompt := st.chat_input("Pergunte ao Mentor..."):
+        # 1. Adiciona pergunta do usuário
         st.session_state.messages.append({"role": "user", "content": prompt})
         st.chat_message("user", avatar="👤").write(prompt)
 
+        # 2. Tenta fechar o teclado (Mobile Hack)
+        dismiss_keyboard()
+
+        # 3. Resposta com STREAMING (Efeito de Digitação)
         with st.chat_message("assistant", avatar="⚡"):
-            container = st.empty()
             library = st.session_state.get("library_refs")
-            
             if library:
                 try:
+                    # Aviso visual rápido antes de começar a escrever
+                    status_placeholder = st.empty()
+                    status_placeholder.markdown("`Consultando biblioteca...`")
+                    
                     model_name = get_best_model()
-                    # Prompt genérico e profissional
                     system_prompt = """
                     Você é um Mentor Sênior de Educação Física.
-                    Seu público são Personal Trainers experientes.
                     Responda de forma direta, técnica e baseada APENAS nos arquivos fornecidos.
                     Sempre cite a fonte (ex: 'Segundo Schoenfeld...', 'Tabela 2 da IUSCA').
                     """
                     model = genai.GenerativeModel(model_name, system_instruction=system_prompt)
                     
-                    response = model.generate_content(library + [prompt])
-                    container.markdown(response.text)
-                    st.session_state.messages.append({"role": "assistant", "content": response.text})
+                    # ATIVA O STREAMING AQUI
+                    response_stream = model.generate_content(library + [prompt], stream=True)
+                    
+                    # Limpa o aviso de "Consultando"
+                    status_placeholder.empty()
+                    
+                    # Placeholder para o texto que vai surgindo
+                    response_placeholder = st.empty()
+                    full_response = ""
+                    
+                    # Loop para escrever em tempo real
+                    for chunk in response_stream:
+                        if chunk.text:
+                            full_response += chunk.text
+                            # Atualiza a tela a cada pedaço de texto
+                            response_placeholder.markdown(full_response + "▌") 
+                    
+                    # Remove o cursor '▌' no final
+                    response_placeholder.markdown(full_response)
+                    
+                    st.session_state.messages.append({"role": "assistant", "content": full_response})
+                    
                 except Exception as e:
-                    container.error(f"Erro: {e}")
+                    st.error(f"Erro: {e}")
             else:
-                container.error("Sistema desconectado.")
+                st.error("Sistema desconectado.")
